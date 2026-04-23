@@ -3,9 +3,7 @@ IBM LSF for vLLM Persistent Inference Service
 
 Overview
 --------
-This repository shows how to run a long-running vLLM inference service under IBM LSF,
-validate it through a standard OpenAI-compatible API, access it from a Jupyter notebook,
-and reuse the same service from a downstream batch job.
+In this repository we demonstrate how to deploy a large-language model inference service on an LSF cluster using vLLM. The service exposes an OpenAI-compatible API. We show how various clients can use the model for interactive or batch inference.
 
 What this implementation demonstrates
 -------------------------------------
@@ -37,11 +35,24 @@ Prerequisites
 - curl installed
 - network access from the execution host to pull the vLLM image and model
 - a single-node IBM LSF setup is sufficient for this implementation
+- shared $HOME directory across the cluster
 
 Note:
 Replace "your-host" with the hostname or IP address of the system where the vLLM service is running.
 
 The examples below assume you are running as the same user for all steps.
+
+Get the repository and move into it
+-----------------------------------
+
+```bash
+git clone https://github.com/IBMSpectrumComputing/lsf-integrations.git
+cd lsf-integrations/LSF-vLLM
+```
+After this follow the instructions step by step given below. 
+
+Part 1: Deploy the LLM
+======================
 
 Step 1: Create the working directories
 --------------------------------------
@@ -72,6 +83,12 @@ Step 2: Review the service script defaults
 ```bash
 MODEL=Qwen/Qwen3-0.6B PORT=8001 API_KEY=local-vllm-key
 ```
+
+NOTE : 
+Default demo API key: local-vllm-key
+
+The service script uses this value unless API_KEY is explicitly set before submission.
+If you choose a different value, update the curl commands, notebook cells, and batch client inputs accordingly.
 
 Step 3: Submit the persistent service job
 -----------------------------------------
@@ -121,8 +138,18 @@ ENDPOINT=$(python3 ~/lsf_vllm_poc/resolve_endpoint.py ${JOBID})
 echo "${ENDPOINT}"
 ```
 
-Step 7: Validate the service with curl
---------------------------------------
+Kill the LLM service
+--------------------
+
+```bash
+bkill ${JOBID}
+```
+
+Part 2: Use the LLM
+===================
+
+Use the LLM with curl
+---------------------
 
 ```bash
 curl -sS "${ENDPOINT}/models"   -H "Authorization: Bearer local-vllm-key"
@@ -139,8 +166,13 @@ curl -sS "${ENDPOINT}/chat/completions"   -H "Content-Type: application/json"   
   }'
 ```
 
-Step 8: Validate the service from Jupyter
------------------------------------------
+Use the LLM from Jupyter
+------------------------
+
+Additional prerequisite:
+- You must have SSH access from your laptop to the IBM LSF host where Jupyter will run.
+
+Run the following commands on the IBM LSF host / cluster node:
 
 ```bash
 python3 -m venv ~/lsf_vllm_poc/notebook/.venv
@@ -150,24 +182,38 @@ pip install notebook jupyterlab requests openai ipykernel
 python -m ipykernel install --user --name lsf-vllm --display-name "Python (lsf-vllm)"
 ```
 
+Start Jupyter on the IBM LSF host / cluster node:
+
 ```bash
 jupyter notebook --no-browser --ip=0.0.0.0 --port 8888 --allow-root
 ```
+
+Jupyter will print a URL containing a token. Keep that terminal running.
+
+Run the following command on your laptop to create an SSH tunnel:
 
 ```bash
 ssh -L 8888:127.0.0.1:8888 user@your-host
 ```
 
+Open the following URL in a web browser on your laptop:
+
 ```
 http://127.0.0.1:8888
 ```
+
+When prompted, use the token printed by Jupyter on the IBM LSF host.
+
+If the notebook kernel is running on the same IBM LSF host as the vLLM service, use the following base URL inside the notebook:
 
 ```
 http://127.0.0.1:8001/v1
 ```
 
-Step 9: Validate downstream batch reuse
----------------------------------------
+In this flow, the browser runs on the laptop, but the notebook kernel runs on the IBM LSF host. That is why the notebook can access the local vLLM endpoint at `http://127.0.0.1:8001/v1`.
+
+Use the LLM from an IBM LSF batch job
+-------------------------------------
 
 ```bash
 python3 ~/lsf_vllm_poc/batch_client.py ${JOBID} ~/lsf_vllm_poc/corpus/prompts.txt
@@ -191,40 +237,8 @@ bpeek ${BATCH_JOBID}
 cat ~/lsf_vllm_poc/results/batch_${JOBID}.jsonl
 ```
 
-Cleanup
--------
-
-```bash
-bkill ${BATCH_JOBID}
-bkill ${JOBID}
-```
-
-Troubleshooting
----------------
-
-```bash
-bpeek ${JOBID}
-podman ps -a
-podman logs vllm-job-${JOBID}
-```
-
-```bash
-curl -sS http://127.0.0.1:8001/v1/models -H "Authorization: Bearer local-vllm-key"
-```
-
-Success criteria
-----------------
-1. the service job is RUN under IBM LSF
-2. the registry file exists
-3. /v1/models works
-4. /v1/chat/completions works
-5. the Jupyter notebook can call the service successfully
-6. the batch client works locally
-7. the IBM LSF batch job completes successfully
-8. the result file contains responses for the full prompt corpus
-
-Step 10: Validate using Open WebUI (Linux)
-------------------------------------------
+Use the LLM with Open WebUI (Linux)
+-----------------------------------
 
 ```bash
 podman run -d   -p 3000:8080   -e OPENAI_API_BASE_URL=http://your-host:8001/v1   -e OPENAI_API_KEY=local-vllm-key   -e WEBUI_SECRET_KEY=my-openwebui-secret   -v open-webui:/app/backend/data   --name open-webui   ghcr.io/open-webui/open-webui:main
@@ -246,3 +260,11 @@ Qwen/Qwen3-0.6B
 
 Test:
 Say one short line about LSF-managed model serving.
+
+Cleanup
+-------
+
+```bash
+bkill ${BATCH_JOBID}
+bkill ${JOBID}
+```
